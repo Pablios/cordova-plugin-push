@@ -13,11 +13,11 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import androidx.core.text.HtmlCompat
 import android.text.Spanned
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.RemoteInput
-import androidx.core.text.HtmlCompat
 import com.adobe.phonegap.push.PushPlugin.Companion.isActive
 import com.adobe.phonegap.push.PushPlugin.Companion.isInForeground
 import com.adobe.phonegap.push.PushPlugin.Companion.sendExtras
@@ -46,7 +46,7 @@ class FCMService : FirebaseMessagingService() {
     private val messageMap = HashMap<Int, ArrayList<String?>>()
 
     private val FLAG_MUTABLE = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-      PendingIntent.FLAG_MUTABLE
+      PendingIntent.FLAG_ONE_SHOT
     } else {
       0
     }

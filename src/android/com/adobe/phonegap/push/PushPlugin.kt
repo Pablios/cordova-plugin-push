@@ -1,6 +1,5 @@
 package com.adobe.phonegap.push
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.annotation.TargetApi
 import android.app.Activity
@@ -8,7 +7,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.ContentResolver
 import android.content.Context
-import android.content.pm.PackageManager
 import android.content.res.Resources.NotFoundException
 import android.media.AudioAttributes
 import android.net.Uri
@@ -28,6 +26,10 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.*
 import java.util.concurrent.ExecutionException
+//duas novas
+import android.content.Intent
+import android.app.AlertDialog
+
 
 /**
  * Cordova Plugin Push
@@ -39,15 +41,12 @@ class PushPlugin : CordovaPlugin() {
     const val PREFIX_TAG: String = "cordova-plugin-push"
     private const val TAG: String = "$PREFIX_TAG (PushPlugin)"
 
-    private const val REQ_CODE_INITIALIZE_PLUGIN = 0
-
     /**
      * Is the WebView in the foreground?
      */
     var isInForeground: Boolean = false
 
     private var pushContext: CallbackContext? = null
-    private var pluginInitData: JSONArray? = null
     private var gWebView: CordovaWebView? = null
     private val gCachedExtras = Collections.synchronizedList(ArrayList<Bundle>())
 
@@ -438,15 +437,10 @@ class PushPlugin : CordovaPlugin() {
     // Better Logging
     fun formatLogMessage(msg: String): String = "Execute::Initialize: ($msg)"
 
-    pushContext = callbackContext
-    pluginInitData = data;
-
-    var hasPermission = checkForPostNotificationsPermission()
-    if (!hasPermission)
-      return
-
     cordova.threadPool.execute(Runnable {
       Log.v(TAG, formatLogMessage("Data=$data"))
+
+      pushContext = callbackContext
 
       val sharedPref = applicationContext.getSharedPreferences(
         PushConstants.COM_ADOBE_PHONEGAP_PUSH,
@@ -610,22 +604,6 @@ class PushPlugin : CordovaPlugin() {
     })
   }
 
-  private fun checkForPostNotificationsPermission(): Boolean {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-      if (!PermissionHelper.hasPermission(this, Manifest.permission.POST_NOTIFICATIONS))
-      {
-        PermissionHelper.requestPermission(
-          this,
-          REQ_CODE_INITIALIZE_PLUGIN,
-          Manifest.permission.POST_NOTIFICATIONS
-        )
-        return false
-      }
-    }
-
-    return true
-  }
-
   private fun executeActionUnregister(data: JSONArray, callbackContext: CallbackContext) {
     // Better Logging
     fun formatLogMessage(msg: String): String = "Execute::Unregister: ($msg)"
@@ -680,26 +658,30 @@ class PushPlugin : CordovaPlugin() {
     }
   }
 
+  // Change in callback + permission dialog
   private fun executeActionHasPermission(callbackContext: CallbackContext) {
     // Better Logging
     fun formatLogMessage(msg: String): String = "Execute::HasPermission: ($msg)"
 
     cordova.threadPool.execute {
       try {
-        val isNotificationEnabled = NotificationManagerCompat.from(applicationContext)
-          .areNotificationsEnabled()
+        val isNotificationEnabled = NotificationManagerCompat.from(applicationContext).areNotificationsEnabled()
 
         Log.d(TAG, formatLogMessage("Has Notification Permission: $isNotificationEnabled"))
 
-        val jo = JSONObject().apply {
-          put(PushConstants.IS_ENABLED, isNotificationEnabled)
-        }
+        cordova.activity.runOnUiThread {
+          if (!isNotificationEnabled) {
+            //Show permission popup
+            showNotificationPermissionDialog()
+          }
 
-        val pluginResult = PluginResult(PluginResult.Status.OK, jo).apply {
-          keepCallback = true
-        }
+          val jo = JSONObject().put(PushConstants.IS_ENABLED, isNotificationEnabled)
 
-        callbackContext.sendPluginResult(pluginResult)
+          val pluginResult = PluginResult(PluginResult.Status.OK, jo)
+          pluginResult.keepCallback = true
+
+          callbackContext.sendPluginResult(pluginResult)
+        }
       } catch (e: UnknownError) {
         callbackContext.error(e.message)
       } catch (e: JSONException) {
@@ -708,6 +690,41 @@ class PushPlugin : CordovaPlugin() {
     }
   }
 
+  private fun redirectToSettings() {
+    val intent = Intent()
+    intent.action = "android.settings.APP_NOTIFICATION_SETTINGS"
+
+    // For Android 5-7
+    intent.putExtra("app_package", cordova.activity.packageName)
+    intent.putExtra("app_uid", cordova.activity.applicationInfo.uid)
+
+    // For Android 8 and above
+    intent.putExtra("android.provider.extra.APP_PACKAGE", cordova.activity.packageName)
+
+    cordova.activity.startActivity(intent)
+  }
+
+  fun showNotificationPermissionDialog() {
+    val appName = cordova.activity.packageManager.getApplicationLabel(cordova.activity.applicationInfo).toString()
+
+    cordova.activity.runOnUiThread {
+      val builder = AlertDialog.Builder(cordova.activity)
+      val title = "$appName - Deseja Enviar Notificações"
+      val subtitle = "As notificações podem incluir alertas, sons e avisos nos ícones, os quais podem ser configurados nos Ajustes."
+
+    builder.setTitle(title)
+      .setMessage(subtitle)
+      .setPositiveButton("Permitir") { _, _ ->
+        redirectToSettings()
+      }
+      .setNegativeButton("Não Permitir") { dialog, _ ->
+        dialog.dismiss()
+      }
+        val dialog = builder.create()
+        dialog.show()
+      }
+  }
+  
   private fun executeActionSetIconBadgeNumber(data: JSONArray, callbackContext: CallbackContext) {
     fun formatLogMessage(msg: String): String = "Execute::SetIconBadgeNumber: ($msg)"
 
@@ -896,31 +913,6 @@ class PushPlugin : CordovaPlugin() {
     topic?.let {
       Log.d(TAG, "Unsubscribing to topic: $it")
       FirebaseMessaging.getInstance().unsubscribeFromTopic(it)
-    }
-  }
-
-  override fun onRequestPermissionResult(
-    requestCode: Int,
-    permissions: Array<out String>?,
-    grantResults: IntArray?
-  ) {
-    super.onRequestPermissionResult(requestCode, permissions, grantResults)
-
-    for (r in grantResults!!) {
-      if (r == PackageManager.PERMISSION_DENIED) {
-        pushContext?.sendPluginResult(
-          PluginResult(
-            PluginResult.Status.ILLEGAL_ACCESS_EXCEPTION,
-            "Permission to post notifications was denied by the user"
-          )
-        )
-        return
-      }
-    }
-
-    if (requestCode == REQ_CODE_INITIALIZE_PLUGIN)
-    {
-      executeActionInitialize(pluginInitData!!, pushContext!!)
     }
   }
 }
